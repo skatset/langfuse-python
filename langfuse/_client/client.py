@@ -3951,7 +3951,7 @@ class Langfuse:
             keyword argument. If not set, defaults to 60 seconds. Disables caching if set to 0.
             type: Literal["chat", "text"]: The type of the prompt to retrieve. Defaults to "text".
             fallback: Union[Optional[List[ChatMessageDict]], Optional[str]]: The prompt string to return if fetching the prompt fails. Important on the first call where no cached prompt is available. Follows Langfuse prompt formatting with double curly braces for variables. Defaults to None.
-            max_retries: Optional[int]: The maximum number of retries in case of API/network errors. Defaults to 2. The maximum value is 4. Retries have an exponential backoff with a maximum delay of 10 seconds.
+            max_retries: Optional[int]: The maximum number of retries in case of API/network errors. Defaults to 2. The maximum value is 4. Retries wait 1 second between attempts.
             fetch_timeout_seconds: Optional[int]: The timeout in seconds for fetching the prompt. Defaults to the default timeout set on the SDK, which is 5 seconds per default.
 
         Returns:
@@ -4086,15 +4086,16 @@ class Langfuse:
                 backoff.constant, Exception, max_tries=max_retries + 1, logger=None
             )
             def fetch_prompts() -> Any:
+                # Retries are handled here, so that max_retries bounds the number of requests.
+                request_options: RequestOptions = {"max_retries": 0}
+                if fetch_timeout_seconds is not None:
+                    request_options["timeout_in_seconds"] = fetch_timeout_seconds
+
                 return self.api.prompts.get(
                     self._url_encode(name),
                     version=version,
                     label=label,
-                    request_options={
-                        "timeout_in_seconds": fetch_timeout_seconds,
-                    }
-                    if fetch_timeout_seconds is not None
-                    else None,
+                    request_options=request_options,
                 )
 
             prompt_response = fetch_prompts()

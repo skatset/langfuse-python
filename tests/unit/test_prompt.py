@@ -1,5 +1,7 @@
+from typing import List
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 from langfuse._client.client import Langfuse
@@ -9,7 +11,8 @@ from langfuse._utils.prompt_cache import (
     PromptCacheItem,
     PromptCacheTaskManager,
 )
-from langfuse.api import NotFoundError, Prompt_Chat, Prompt_Text
+from langfuse.api import LangfuseAPI, NotFoundError, Prompt_Chat, Prompt_Text
+from langfuse.api.core import ApiError
 from langfuse.model import ChatPromptClient, TextPromptClient
 
 
@@ -199,7 +202,7 @@ def test_get_fresh_prompt(langfuse):
         prompt_name,
         version=None,
         label=None,
-        request_options=None,
+        request_options={"max_retries": 0},
     )
 
     assert result == TextPromptClient(prompt)
@@ -244,10 +247,35 @@ def test_using_custom_prompt_timeouts(langfuse):
         prompt_name,
         version=None,
         label=None,
-        request_options={"timeout_in_seconds": 1000},
+        request_options={"max_retries": 0, "timeout_in_seconds": 1000},
     )
 
     assert result == TextPromptClient(prompt)
+
+
+@pytest.mark.parametrize("max_retries", [0, 2])
+def test_max_retries_bounds_http_requests(langfuse: Langfuse, max_retries: int):
+    requests: List[httpx.Request] = []
+
+    def rate_limited(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            429, headers={"Retry-After": "3"}, json={"message": "rate limited"}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(rate_limited)) as http:
+        langfuse.api = LangfuseAPI(
+            base_url="http://langfuse.test",
+            username="pk",
+            password="sk",
+            httpx_client=http,
+        )
+        with patch("time.sleep"), pytest.raises(ApiError):
+            langfuse.get_prompt(
+                "rate_limited", max_retries=max_retries, cache_ttl_seconds=0
+            )
+
+    assert len(requests) == max_retries + 1
 
 
 def test_throw_if_cache_ttl_seconds_positional_argument(langfuse):
