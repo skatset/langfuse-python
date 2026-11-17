@@ -202,7 +202,7 @@ def test_get_fresh_prompt(langfuse):
         prompt_name,
         version=None,
         label=None,
-        request_options={"max_retries": 0},
+        request_options={"max_retries": 2},
     )
 
     assert result == TextPromptClient(prompt)
@@ -247,7 +247,7 @@ def test_using_custom_prompt_timeouts(langfuse):
         prompt_name,
         version=None,
         label=None,
-        request_options={"max_retries": 0, "timeout_in_seconds": 1000},
+        request_options={"max_retries": 2, "timeout_in_seconds": 1000},
     )
 
     assert result == TextPromptClient(prompt)
@@ -270,9 +270,35 @@ def test_max_retries_bounds_http_requests(langfuse: Langfuse, max_retries: int):
             password="sk",
             httpx_client=http,
         )
-        with patch("time.sleep"), pytest.raises(ApiError):
+        with patch("time.sleep") as sleep, pytest.raises(ApiError):
             langfuse.get_prompt(
                 "rate_limited", max_retries=max_retries, cache_ttl_seconds=0
+            )
+
+    assert len(requests) == max_retries + 1
+    assert [call.args[0] for call in sleep.call_args_list] == [3.0] * max_retries
+
+
+@pytest.mark.parametrize("max_retries", [0, 2])
+def test_max_retries_bounds_retries_of_network_errors(
+    langfuse: Langfuse, max_retries: int
+):
+    requests: List[httpx.Request] = []
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(unreachable)) as http:
+        langfuse.api = LangfuseAPI(
+            base_url="http://langfuse.test",
+            username="pk",
+            password="sk",
+            httpx_client=http,
+        )
+        with patch("time.sleep"), pytest.raises(httpx.ConnectError):
+            langfuse.get_prompt(
+                "unreachable", max_retries=max_retries, cache_ttl_seconds=0
             )
 
     assert len(requests) == max_retries + 1

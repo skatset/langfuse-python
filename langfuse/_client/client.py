@@ -116,7 +116,7 @@ from langfuse.api import (
     Prompt_Chat,
     Prompt_Text,
 )
-from langfuse.api.core import RequestOptions
+from langfuse.api.core import ApiError, RequestOptions
 from langfuse.api.core.datetime_utils import serialize_datetime
 from langfuse.batch_evaluation import (
     BatchEvaluationResult,
@@ -3951,7 +3951,7 @@ class Langfuse:
             keyword argument. If not set, defaults to 60 seconds. Disables caching if set to 0.
             type: Literal["chat", "text"]: The type of the prompt to retrieve. Defaults to "text".
             fallback: Union[Optional[List[ChatMessageDict]], Optional[str]]: The prompt string to return if fetching the prompt fails. Important on the first call where no cached prompt is available. Follows Langfuse prompt formatting with double curly braces for variables. Defaults to None.
-            max_retries: Optional[int]: The maximum number of retries in case of API/network errors. Defaults to 2. The maximum value is 4. Retries wait 1 second between attempts.
+            max_retries: Optional[int]: The maximum number of retries in case of API/network errors. Defaults to 2. The maximum value is 4. Retries of HTTP 408, 409, 429 and 5xx responses wait for the response's Retry-After or an exponential backoff, up to 60 seconds; network errors are retried after up to 1 second.
             fetch_timeout_seconds: Optional[int]: The timeout in seconds for fetching the prompt. Defaults to the default timeout set on the SDK, which is 5 seconds per default.
 
         Returns:
@@ -4081,13 +4081,17 @@ class Langfuse:
         langfuse_logger.debug("Fetching prompt '%s' from server...", cache_key)
 
         try:
-
+            # The HTTP client retries API errors itself, honouring Retry-After; this loop retries
+            # the rest (network errors), so no request is retried by both.
             @backoff.on_exception(
-                backoff.constant, Exception, max_tries=max_retries + 1, logger=None
+                backoff.constant,
+                Exception,
+                max_tries=max_retries + 1,
+                giveup=lambda error: isinstance(error, ApiError),
+                logger=None,
             )
             def fetch_prompts() -> Any:
-                # Retries are handled here, so that max_retries bounds the number of requests.
-                request_options: RequestOptions = {"max_retries": 0}
+                request_options: RequestOptions = {"max_retries": max_retries}
                 if fetch_timeout_seconds is not None:
                     request_options["timeout_in_seconds"] = fetch_timeout_seconds
 
