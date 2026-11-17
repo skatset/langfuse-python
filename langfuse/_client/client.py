@@ -4082,7 +4082,8 @@ class Langfuse:
 
         try:
             # The HTTP client retries API errors itself, honouring Retry-After; this loop retries
-            # the rest (network errors), so no request is retried by both.
+            # only the rest (network errors). A network error after an API error still starts the
+            # client's retries over in the next try.
             @backoff.on_exception(
                 backoff.constant,
                 Exception,
